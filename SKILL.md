@@ -1,5 +1,5 @@
 ---
-name: typescript-pocock
+name: typescript-skill
 description: >
   Encode Matt Pocock's TypeScript best practices for AI-assisted code generation.
   Use when writing, reviewing, or refactoring TypeScript code.
