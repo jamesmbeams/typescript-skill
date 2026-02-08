@@ -4,13 +4,14 @@ description: >
   Encode Matt Pocock's TypeScript best practices for AI-assisted code generation.
   Use when writing, reviewing, or refactoring TypeScript code.
 version: "1.1"
-author: Matt Pocock (Total TypeScript) — compiled skill
+author: Community compilation
+source: Matt Pocock's Total TypeScript (https://www.totaltypescript.com)
 tags: [typescript, best-practices, code-quality, type-safety]
 ---
 
 # TypeScript Best Practices — Matt Pocock Style
 
-A comprehensive reference for writing high-quality TypeScript, based on Matt Pocock's teachings from Total TypeScript.
+A comprehensive reference for writing high-quality TypeScript, compiled from Matt Pocock's publicly available teachings at [Total TypeScript](https://www.totaltypescript.com). Not affiliated with or endorsed by Matt Pocock or Total TypeScript.
 
 ---
 
