@@ -106,7 +106,7 @@ setStatus("active");      // also works
 `satisfies` validates that a value conforms to a type **without widening it**. The value beats the type.
 
 ### When to use each:
-- **Colon annotation (`:`)** — type beats value. Use for explicit typing, function parameters, variables that will be reassigned
+- **Colon annotation (`:`)** — type beats value. Use for explicit typing, function parameters, variables that will be reassigned or mutated (in the case of objects)
 - **`satisfies`** — value beats type. Use when you want validation AND narrow inference
 - **`as`** — almost never. It lets you lie to TypeScript
 - **No annotation** — let TypeScript infer. This is the default and often the best choice
@@ -178,6 +178,46 @@ const endpoints = {
 ```
 
 **Rule:** Use `as const satisfies` when you want to lock down a value to literal types while also validating it conforms to a shape. Use `satisfies` alone when you don't need literal narrowing. Use `:` when you explicitly want the wider type.
+
+### How to avoid "widening" with dynamic objects
+
+To avoid widening due to "Colon Annotation" you should a function with Generic type arguments.
+```typescript
+// ❌ Colon widens — loses key information
+interface Option {
+  name: string;
+  ttl: number;
+  force?: boolean;
+}
+const options: Option = { name: 'example', ttl: 5000 };
+
+if (condition) {
+  options.force = true;
+}
+
+// ✅ use Generic function with type arguments and a generic type with type parameters
+interface Option<Name extends string, TTL extends number> {
+  name: Name;
+  ttl: TTL;
+  force?: boolean;
+}
+function OptionsObject<const Name extends string, const TTL extends number>(
+  opt: Option<Name, TTL>
+) {
+  return opt;
+}
+
+const options = OptionsObject({
+  name: 'example',
+  ttl: 5000
+});
+
+if (condition) {
+  options.force = true;
+}
+// Typescript still knows that typeof options["name"] is 'example'
+// Typescript still knows that typeof options["ttl"] is 5000
+```
 
 ---
 
@@ -324,9 +364,24 @@ function getProperty<T, K extends keyof T>(obj: T, key: K): T[K] {
 }
 
 // ✅ Use defaults for common cases
-function createState<T = string>(initial: T) {
-  return { value: initial };
-}
+// For example, if the "value" of a dropdown option is normally a string
+type DropdownOption<T = string> = {
+  value: T;
+  label: string;
+};
+const dropdownArray = [
+  { value: "child", label: "Child" },
+  { value: "spouse", label: "Spouse" },
+  { value: "domestic_partner", label: "Domestic Partner" },
+] as const satisfies DropdownOption[];
+
+// But we want to allow for more narrow types in certain usages
+type EligibleDependentType = "spouse" | "domestic_partner";
+
+const eligibleDependentTypeOptions: DropdownOption<EligibleDependentType>[] = [
+  { value: "spouse", label: "Spouse" },
+  { value: "domestic_partner", label: "Domestic Partner" },
+] as const satisfies DropdownOption<EligibleDependentType>[];
 
 // ✅ Multiple constraints with intersection
 function merge<T extends object, U extends object>(a: T, b: U): T & U {
@@ -341,6 +396,10 @@ function map<T, U>(arr: T[], fn: (item: T) => U): U[] {
 
 // ❌ Avoid: unnecessary generics (the "useless generic")
 function bad<T>(x: T): void { } // T isn't used meaningfully
+
+// ❌ Avoid: using generics only for return type
+// Axios' get method only uses T to assert the type of the returned value, which weakens type strictness
+function get<T = any, R = AxiosResponse<T>, D = any>(url: string, config?: AxiosRequestConfig<D>): Promise<R>;
 
 // ✅ Rule of thumb: if a generic appears only once, you don't need it
 function good(x: unknown): void { }
@@ -369,17 +428,21 @@ getOrDefault([1, 2, 3], 0);      // ✅
 getOrDefault([1, 2, 3], "nope");  // ❌ error — string is not number
 ```
 
-### Assign to local type variables for performance:
+### Assign to local type variables for performance and readability:
 
 ```typescript
-// ✅ Cache complex types in generic slots
-type Result<T> = {
-  data: T;
-  error: null;
-} | {
-  data: null;
-  error: Error;
-};
+// ❌ Inline Definition - Bad for readability, bad for performance
+function handle(
+  result: { success: true; data: User } | { success: false; error: Error }
+) {
+  // ..
+}
+
+// ✅ Local Named Types
+type Result<T> = { success: true; data: T } | { success: false; error: Error };
+function handle(result: Result<User>) {
+  // ...
+}
 ```
 
 ---
@@ -417,6 +480,55 @@ type BadAuthState = {
 };
 ```
 
+### Shape Based Discriminated Unions
+
+Discriminated unions are best when there is a property that drives the discrimination. But it is still possible and desirable to, whenever possible, create a union of strict types as opposed to a single looser type.
+
+For instance, say we have a `User` object, and in our system prior to finishing onboarding, they only have an id and an email address, but after registration they will also have a first and last name.
+
+```typescript
+// ✅ Create Two Alternative User types
+interface UserBase {
+  id: string;
+  email: string;
+}
+
+interface RegisteredUser extends UserBase {
+  firstName?: undefined;
+  lastName?: undefined;
+}
+
+interface OnboardedUser extends UserBase {
+  firstName: string;
+  lastName: string;
+}
+
+function logUser(user: RegisteredUser | OnboardedUser) {
+  if (typeof user.firstName === "string") {
+    // Here typescript can properly infer that lastName is a string if firstName is a string
+  } else {
+    // Here typescript knows that both firstName and lastName are undefined
+  }
+}
+
+// ❌ Avoid: optional properties for mutually exclusive state
+interface User {
+  id: string;
+  email: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+function logUser(user: User) {
+  if (typeof user.firstName === "string") {
+    // Here typescript can't infer that lastName is a string just because firstName is a string
+  } else {
+    // Here typescript can't infer that firstName and lastName are undefined
+  }
+}
+```
+
+
 **Rule:** When properties are mutually exclusive or depend on a state, use a discriminated union — never optional properties.
 
 ---
@@ -427,28 +539,24 @@ TypeScript's type system is structural. Use branded types when you need nominal-
 
 ```typescript
 // ✅ Brand pattern
-type UserId = string & { readonly __brand: unique symbol };
-type OrderId = string & { readonly __brand: unique symbol };
+// A unique symbol ensures the brand key is unique and won't clash with any existing properties.
+declare const brand: unique symbol;
 
-function createUserId(id: string): UserId {
-  return id as UserId;
+// A generic utility type to create branded types.
+export type Brand<T, B extends string> = T & { [brand]: B };
+
+type Ssn = Brand<string, "SSN">;
+
+declare const userInput: string;
+declare const doSomething: (input: Ssn) => void;
+// assume "isValidSsn" checks that a string is a valid Ssn and returns a boolean
+declare const isValidSsn: (input: string) => input is Ssn;
+
+doSomething(userInput); // ❌ Type error — userInput is not an Ssn
+doSomething("345-34-0838") // ❌ Type error — Even though it structurally matches, since it's unverified it is not treated as an Ssn
+if (isValidSsn(userInput)) {
+  doSomething(userInput); // ✅ userInput is narrowed and branded as a valid Ssn
 }
-
-function getUser(id: UserId) { /* ... */ }
-
-const userId = createUserId("user_123");
-const orderId = "order_456" as OrderId;
-
-getUser(userId);   // ✅
-getUser(orderId);  // ❌ Type error — OrderId is not UserId
-getUser("raw");    // ❌ Type error — string is not UserId
-
-// ✅ Simpler brand helper
-declare const __brand: unique symbol;
-type Brand<T, B> = T & { [__brand]: B };
-
-type Email = Brand<string, "Email">;
-type URL = Brand<string, "URL">;
 ```
 
 ---
@@ -630,20 +738,29 @@ function parse(input: unknown) {
 ### ❌ Don't use `as` for everyday typing
 ```typescript
 // ❌ Lying to TypeScript
-const user = {} as User;
+function logMaybeUser(data: unknown) {
+  const user = data as User;
+}
 
-// ✅ Actually construct the object properly
-const user: User = { id: "1", name: "Matt" };
+// ✅ Actually validate 
+function logMaybeUser(data: unknown) {
+  if (isUser(data)) {
+    // data narrowed to type User
+  }
+}
 ```
 
 ### ❌ Don't use `Function` type
 ```typescript
 // ❌ Too loose
-const fn: Function = () => {};
+const doSomething = (fn: Function) {
+  //
+}
 
 // ✅ Be specific
-const fn: () => void = () => {};
-const fn: (...args: unknown[]) => unknown = () => {};
+const doSomething = (fn: () => void) {
+  //
+}
 ```
 
 ### Understand the `{}` type
@@ -656,8 +773,8 @@ const num: {} = 42;       // also valid!
 function nonNullable<T extends {}>(value: T): T { return value; }
 
 // ❌ Don't use {} when you mean "an object with properties"
-// ✅ Use Record<string, unknown> for generic objects
-const obj: Record<string, unknown> = { key: "value" };
+// ✅ Use Record<PropertyKey, unknown> for generic objects
+const obj: Record<PropertyKey, unknown> = { key: "foo", 1: "bar", [Symbol("random")]: "baz" };
 ```
 
 ### ❌ Don't use non-null assertion (`!`) casually
@@ -667,7 +784,9 @@ const el = document.getElementById("app")!;
 
 // ✅ Handle the null case
 const el = document.getElementById("app");
-if (!el) throw new Error("Element not found");
+if (!el) {
+  throw new Error("Element not found")
+};
 ```
 
 ### ❌ Don't use `object` type
@@ -678,7 +797,7 @@ function process(obj: object) {}
 // ✅ Be specific about the shape
 function process(obj: { id: string }) {}
 // or use a generic
-function process<T extends Record<string, unknown>>(obj: T) {}
+function process<T extends Record<PropertyKey, unknown>>(obj: T) {}
 ```
 
 ---
@@ -688,16 +807,6 @@ function process<T extends Record<string, unknown>>(obj: T) {}
 ### Prefer interfaces for heavily-reused object shapes in extends chains
 TypeScript caches interfaces by name; intersection types are recomputed.
 
-### Avoid deep type instantiation
-```typescript
-// ❌ Recursive types that go too deep
-type DeepPartial<T> = {
-  [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
-};
-// Fine for moderate depth, but can cause "Type instantiation is excessively deep" on complex objects
-
-// ✅ Limit recursion depth or use a library (ts-toolbelt)
-```
 
 ### Use `skipLibCheck: true`
 Always. Checking node_modules `.d.ts` files is slow and rarely catches real bugs.
@@ -754,7 +863,7 @@ type Nope = GetString<[42, "hello"]>;  // never (42 doesn't extend string)
 
 ## 18. Runtime Validation at System Boundaries (Zod)
 
-TypeScript types disappear at runtime. At **system boundaries** (API responses, user input, env vars, file reads), you need runtime validation. Matt Pocock recommends Zod as the standard approach.
+TypeScript types disappear at runtime. At **system boundaries** (API responses, user input, env vars, file reads, poorly typed libraries), you need runtime validation. Matt Pocock recommends Zod as the standard approach.
 
 ```typescript
 import { z } from "zod";
@@ -796,6 +905,20 @@ const EnvSchema = z.object({
 export const env = EnvSchema.parse(process.env);
 
 // ✅ Compose schemas
+const AddressSchema = z.object({
+  line_1: z.string(),
+  line_2: z.string(),
+  city: z.string(),
+  state: z.string(),
+  zip: z.string()
+});
+const UserSchema = z.object({
+  ...AddressSchema.shape
+  id: z.string().uuid(),
+  name: z.string().min(1),
+  email: z.string().email(),
+  role: z.enum(["admin", "user", "guest"]),
+});
 const CreateUserSchema = UserSchema.omit({ id: true });
 const UpdateUserSchema = UserSchema.partial().required({ id: true });
 ```
@@ -817,7 +940,7 @@ const UpdateUserSchema = UserSchema.partial().required({ id: true });
 | Function return type | Let TypeScript infer (usually) |
 | Public library export | Annotate return type explicitly |
 | Mutually exclusive state | Discriminated union |
-| Preventing type confusion | Branded types |
+| Enforcing extra validation | Branded types |
 | Generic parameter used once | Remove it, use `unknown` |
 | Typing callbacks/functions | Function property syntax `fn: () => void` |
 | `any` needed | Use `unknown` + narrowing instead |
@@ -826,4 +949,4 @@ const UpdateUserSchema = UserSchema.partial().required({ id: true });
 | Extracting types from other types | Conditional type with `infer` |
 | Controlling generic inference site | `NoInfer<T>` |
 | External data (API, env, user input) | Zod schema → derive type with `z.infer` |
-| `{}` type needed | OK for "non-nullish" constraint; use `Record<string, unknown>` for objects |
+| `{}` type needed | OK for "non-nullish" constraint; use `Record<PropertyKey, unknown>` for objects |
